@@ -27,7 +27,8 @@ Tx1Context()
 {
 }
 
-/** This is the callback function for hackrf_start_tx.  It doesn't do a lot just yet.
+/** This is the callback function for hackrf_start_tx.  It doesn't do
+ * a lot just yet.
  * @param[in] transfer The data structure with all the data transfer
  *   buffers and what-not to be transmitted.
  * @return -1 to immediately stop transmitting as we're not doing
