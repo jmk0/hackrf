@@ -2,6 +2,7 @@
 #include <iostream>
 #include <cmath>
 #include <unistd.h>
+#include <signal.h>
 
 using namespace std;
 
@@ -38,6 +39,28 @@ int sampleBlockCB(hackrf_transfer* transfer)
    cerr << "buffer_length=" << transfer->buffer_length << endl
         << "valid_length=" << transfer->valid_length << endl;
    return -1;
+}
+
+/// Termination flag for signal handler.
+bool timeToDie = false;
+/// Caught signal.
+int caughtSig = 0;
+
+/// Signal handler to cleanly handle termination.
+void signalHandler(int sig)
+{
+   timeToDie = true;
+   caughtSig = sig;
+}
+
+/// Set up the signal handler.
+void setupSigHandler()
+{
+   signal(SIGHUP, signalHandler);
+   signal(SIGINT, signalHandler);
+   signal(SIGTERM, signalHandler);
+   signal(SIGQUIT, signalHandler);
+   signal(SIGPIPE, signalHandler);
 }
 
 
@@ -110,6 +133,8 @@ int main(int argc, char *argv[])
    {
       cout << "hackrf_set_freq success" << endl;
    }
+      // set up the signal handler before we start transmitting
+   setupSigHandler();
       // Theoretically, start transmitting.  Doesn't really do much
       // since the callback immediately returns a failure.
    Tx1Context context;
@@ -123,10 +148,18 @@ int main(int argc, char *argv[])
    {
       cout << "hackrf_start_tx success" << endl;
    }
-      // Wait a little bit before terminating.  Normally right here
-      // you would probably check hackrf_is_streaming and any signal
-      // handlers.
-   sleep(1);
+      // Wait before terminating.
+   while ((hackrf_is_streaming(device) == HACKRF_TRUE) && !timeToDie)
+   {
+      sleep(1);
+   }
+      // Put the termination message here and not in the signal
+      // handler as certain operations like stream I/O are not
+      // recommended in that context.
+   if (timeToDie)
+   {
+      cerr << "Caught signal " << caughtSig << ", terminating" << endl;
+   }
       // Close down the library and device.
    rv = hackrf_exit();
    if (rv != HACKRF_SUCCESS)
