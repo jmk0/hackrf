@@ -1,8 +1,10 @@
 #include <libhackrf/hackrf.h>
+#include <vector>
 #include <iostream>
 #include <cmath>
 #include <unistd.h>
 #include <signal.h>
+#include <string.h>
 
 using namespace std;
 
@@ -13,6 +15,7 @@ const int divider = 100;
    // 8 Msps is the minimum recommended for the hackrf one
 const int sampRate = 8000000;
 const int API_FAIL = 1; ///< Exit code for API failure.
+const int toneFreq = 1000; ///< transmitted tone in Hz
 
 /** This class is just a dummy to be used as a context object for the
  * sample block callback function.  One potential use we might have
@@ -23,14 +26,54 @@ class Tx1Context
 {
 public:
    Tx1Context();
-   unsigned long foo;
+   void fill(hackrf_transfer* transfer);
+   unsigned long bufIdx;
+   vector<uint8_t> buffer;
 };
 
 Tx1Context ::
 Tx1Context()
-      : foo(666)
+      : bufIdx(0)
 {
+      // Allocate a buffer large enough to hold 2 full cycles of
+      // interleaved IQ samples.
+   unsigned sps = (sampRate / toneFreq);
+   buffer.resize(sps * 4, 0);
+      // And fill that buffer, currently with Q=0
+   for (unsigned i = 0; i < buffer.size(); i += 2)
+   {
+         // Scale the sine wave to fit in uint8_t, with -1=>0, 0=>127 and 1=>254
+         // Obviously 255 will never be a valid value.
+         // I sample.
+      buffer[i] = 127 + (127*sin(2.0*M_PI*(i/sps)));
+         // Q sample
+      buffer[i+1] = 0;
+   }
 }
+
+
+void Tx1Context ::
+fill(hackrf_transfer* transfer)
+{
+      // Bulk copy instead of doing character by character.  It's not
+      // clear what the difference is between buffer_length and
+      // valid_length.  Maybe it's something that shows up when
+      // receiving data?
+   int bufLen = transfer->valid_length;
+   while (bufLen)
+   {
+      unsigned txLen = std::min(bufLen, (int)(buffer.size() - bufIdx));
+      memcpy(transfer->buffer, &buffer[bufIdx], txLen);
+      bufLen -= txLen;
+      bufIdx += txLen;
+      bufIdx %= buffer.size();
+         // Not recommended to leave this uncommented due to the data rate.
+         // Just here to make sure I'm doing it right.
+         // cerr << "bufLen=" << bufLen << "  bufIdx=" << bufIdx << "  txLen="
+         //      << txLen << endl;
+   }
+}
+
 
 /** This is the callback function for hackrf_start_tx.  It doesn't do
  * a lot just yet.
@@ -40,9 +83,9 @@ Tx1Context()
  *   anything to fill the transmit buffer. */
 int sampleBlockCB(hackrf_transfer* transfer)
 {
-   cerr << "buffer_length=" << transfer->buffer_length << endl
-        << "valid_length=" << transfer->valid_length << endl;
-   return -1;
+   Tx1Context *context = (Tx1Context*)transfer->tx_ctx;
+   context->fill(transfer);
+   return 0;
 }
 
 /// Termination flag for signal handler.
