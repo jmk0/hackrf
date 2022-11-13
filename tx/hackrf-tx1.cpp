@@ -1,6 +1,7 @@
 #include <libhackrf/hackrf.h>
 #include <vector>
 #include <iostream>
+#include <fstream>
 #include <cmath>
 #include <unistd.h>
 #include <signal.h>
@@ -17,6 +18,32 @@ const int sampRate = 8000000;
 const int API_FAIL = 1; ///< Exit code for API failure.
 const int toneFreq = 1000; ///< transmitted tone in Hz
 
+/// Termination flag for signal handler.
+bool timeToDie = false;
+/// Caught signal.
+int caughtSig = 0;
+
+/** Difference between two high-resolution time stamps, for
+ * performance debugging. 
+ * @param[in] left The more recent timespec (generally).
+ * @param[in] right The less recent timespec (generally).
+ * @return left minus right. As one would expect. */
+timespec operator-(const timespec& left, const timespec& right)
+{
+   timespec rv;
+   if ((left.tv_nsec - right.tv_nsec) < 0)
+   {
+      rv.tv_sec = left.tv_sec-right.tv_sec-1;
+      rv.tv_nsec = 1000000000 + left.tv_nsec - right.tv_nsec;
+   }
+   else
+   {
+      rv.tv_sec = left.tv_sec - right.tv_sec;
+      rv.tv_nsec = left.tv_nsec - right.tv_nsec;
+   }
+   return rv;
+}
+
 /** This class is just a dummy to be used as a context object for the
  * sample block callback function.  One potential use we might have
  * for it is to store pre-generated signal buffers to be copied as
@@ -26,15 +53,56 @@ class Tx1Context
 {
 public:
    Tx1Context();
-   void fill(hackrf_transfer* transfer);
-   unsigned long bufIdx;
-   vector<uint8_t> buffer;
+   ~Tx1Context()
+   { /*dbgo.close();*/ }
+   void fill(hackrf_transfer* transfer); ///< fill the hackrf transfer buffer.
+   unsigned long bufIdx; ///< Index into buffer for copying.
+   vector<uint8_t> buffer; ///< Storage for pre-generated signal.
+      // debugging stuff
+      // vector<timespec> times, starts; ///< Run time history of fill().
+      // unsigned timeNum; ///< Index into times and starts.
+      // void report(); ///< dump all the execution time stats.
+      //ofstream dbgo; ///< debug output file.
 };
+
+
+// void Tx1Context ::
+// report()
+// {
+//    double total = 0;
+//    for (unsigned i = 0; i < timeNum; i++)
+//    {
+//          // for each execution of fill() print the amount of time it
+//          // took to execute and how long it was since the last
+//          // execution.
+//       double t = times[i].tv_sec + (times[i].tv_nsec * 1e-9);
+//       cerr << i << " " << t;
+//       if (i > 0)
+//       {
+//          timespec diff = starts[i] - starts[i-1];
+//          double dt = diff.tv_sec + (diff.tv_nsec * 1e-9);
+//          cerr << " " << dt;
+//       }
+//       cerr << endl;
+//       total += t;
+//    }
+//    if (timeNum)
+//    {
+//       cerr << "avg: " << (total/timeNum) << endl;
+//    }
+// }
+
 
 Tx1Context ::
 Tx1Context()
       : bufIdx(0)
 {
+      //dbgo.open("hackrf-tx1.bin");
+      // timespec empty{0,0};
+      // times.resize(10000,empty);
+      // starts.resize(10000,empty);
+      // timeNum = 0;
+   cerr << __PRETTY_FUNCTION__ << endl;
       // Allocate a buffer large enough to hold 2 full cycles of
       // interleaved IQ samples.
    unsigned sps = (sampRate / toneFreq);
@@ -45,33 +113,54 @@ Tx1Context()
          // Scale the sine wave to fit in uint8_t, with -1=>0, 0=>127 and 1=>254
          // Obviously 255 will never be a valid value.
          // I sample.
-      buffer[i] = 127 + (127*sin(2.0*M_PI*(i/sps)));
+      double theta = (double)i/(double)sps;
+         //cerr << "i=" << i << " theta=" << (2.0*M_PI*theta) << endl;
+      buffer[i] = 127 + (127*cos(2.0*M_PI*theta));
          // Q sample
-      buffer[i+1] = 0;
+      buffer[i+1] = 0; // 127 + (127*sin(2.0*M_PI*theta));
    }
+      // dbgo.write((char*)&buffer[0], buffer.size());
 }
 
 
 void Tx1Context ::
 fill(hackrf_transfer* transfer)
 {
+      // timespec time1, time2;
+      // clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time1);
+      // clock_gettime(CLOCK_MONOTONIC_RAW, &starts[timeNum]);
       // Bulk copy instead of doing character by character.  It's not
       // clear what the difference is between buffer_length and
       // valid_length.  Maybe it's something that shows up when
       // receiving data?
    int bufLen = transfer->valid_length;
+   unsigned long outBufIdx = 0;
    while (bufLen)
    {
       unsigned txLen = std::min(bufLen, (int)(buffer.size() - bufIdx));
-      memcpy(transfer->buffer, &buffer[bufIdx], txLen);
+      memcpy(&transfer->buffer[outBufIdx], &buffer[bufIdx], txLen);
       bufLen -= txLen;
       bufIdx += txLen;
       bufIdx %= buffer.size();
+      outBufIdx += txLen;
          // Not recommended to leave this uncommented due to the data rate.
          // Just here to make sure I'm doing it right.
          // cerr << "bufLen=" << bufLen << "  bufIdx=" << bufIdx << "  txLen="
          //      << txLen << endl;
    }
+      //dbgo.write((char*)transfer->buffer, transfer->valid_length);
+      // if (!timeToDie)
+      // {
+      //    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time2);
+      //    if (timeNum < times.size())
+      //    {
+      //       times[timeNum++] = time2 - time1;
+      //    }
+      //    else
+      //    {
+      //       timeToDie = true;
+      //    }
+      // }
 }
 
 
@@ -87,11 +176,6 @@ int sampleBlockCB(hackrf_transfer* transfer)
    context->fill(transfer);
    return 0;
 }
-
-/// Termination flag for signal handler.
-bool timeToDie = false;
-/// Caught signal.
-int caughtSig = 0;
 
 /// Signal handler to cleanly handle termination.
 void signalHandler(int sig)
@@ -214,6 +298,7 @@ int main(int argc, char *argv[])
    {
       cerr << "Caught signal " << caughtSig << ", terminating" << endl;
    }
+      // context.report();
       // Close down the device.
    if (device != nullptr)
    {
