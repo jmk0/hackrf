@@ -9,6 +9,10 @@ using namespace std;
 const uint64_t xmitFreq = 144750000; // in Hz
 const int freq = 3125; // also in Hz, but divided..
 const int divider = 100;
+   // Sample rate in sps, when not using manual
+   // 8 Msps is the minimum recommended for the hackrf one
+const int sampRate = 8000000;
+const int API_FAIL = 1; ///< Exit code for API failure.
 
 /** This class is just a dummy to be used as a context object for the
  * sample block callback function.  One potential use we might have
@@ -74,6 +78,7 @@ int main(int argc, char *argv[])
    {
       cerr << "hackrf_init failed: " << hackrf_error_name((hackrf_error)rv)
            << endl;
+      return API_FAIL;
    }
    else
    {
@@ -84,6 +89,7 @@ int main(int argc, char *argv[])
    if (devices == nullptr)
    {
       cerr << "hackrf_device_list failed" << endl;
+      return API_FAIL;
    }
    else
    {
@@ -100,6 +106,7 @@ int main(int argc, char *argv[])
             {
                cerr << "hackrf_device_list_open failed: "
                     << hackrf_error_name((hackrf_error)rv) << endl;
+               return API_FAIL;
             }
             else
             {
@@ -111,11 +118,13 @@ int main(int argc, char *argv[])
    }
       // set the data sample rate
       // undocumented *sigh*
-   rv = hackrf_set_sample_rate_manual(device, freq, divider);
+      //rv = hackrf_set_sample_rate_manual(device, freq, divider);
+   rv = hackrf_set_sample_rate(device, sampRate);
    if (rv != HACKRF_SUCCESS)
    {
       cerr << "hackrf_set_sample_rate_manual failed: "
            << hackrf_error_name((hackrf_error)rv) << endl;
+      return API_FAIL;
    }
    else
    {
@@ -128,6 +137,7 @@ int main(int argc, char *argv[])
    {
       cerr << "hackrf_set_freq failed: "
            << hackrf_error_name((hackrf_error)rv) << endl;
+      return API_FAIL;
    }
    else
    {
@@ -143,6 +153,7 @@ int main(int argc, char *argv[])
    {
       cerr << "hackrf_start_tx failed: "
            << hackrf_error_name((hackrf_error)rv) << endl;
+      return API_FAIL;
    }
    else
    {
@@ -160,16 +171,43 @@ int main(int argc, char *argv[])
    {
       cerr << "Caught signal " << caughtSig << ", terminating" << endl;
    }
-      // Close down the library and device.
+      // Close down the device.
+   if (device != nullptr)
+   {
+      rv = hackrf_stop_tx(device);
+      if (rv != HACKRF_SUCCESS)
+      {
+         cerr << "hackrf_stop_tx failed: "
+              << hackrf_error_name((hackrf_error)rv) << endl;
+         return API_FAIL;
+      }
+      else
+      {
+         cout << "hackrf_stop_tx success" << endl;
+      }
+      rv = hackrf_close(device);
+      if (rv != HACKRF_SUCCESS)
+      {
+         cerr << "hackrf_close failed: "
+              << hackrf_error_name((hackrf_error)rv) << endl;
+         return API_FAIL;
+      }
+      else
+      {
+         cout << "hackrf_close success" << endl;
+      }
+   }
+      // Close down the library.
    rv = hackrf_exit();
    if (rv != HACKRF_SUCCESS)
    {
       cerr << "hackrf_exit failed: "
            << hackrf_error_name((hackrf_error)rv) << endl;
+      return API_FAIL;
    }
    else
    {
       cout << "hackrf_exit success" << endl;
-   }      
+   }
    return 0;
 }
